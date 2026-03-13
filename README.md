@@ -1,6 +1,6 @@
-# Generic ORM — Rust Demo App
+# Alloy — Rust Demo App
 
-A todo-list application built with Axum, rusqlite, and askama, demonstrating the [Generic ORM](https://github.com/notactuallytreyanastasio/generic_orm) compiled from Temper to Rust.
+A todo-list application built with Axum, rusqlite, and askama, demonstrating the [Alloy](https://github.com/notactuallytreyanastasio/alloy) compiled from Temper to Rust.
 
 ## Stack
 
@@ -9,7 +9,7 @@ A todo-list application built with Axum, rusqlite, and askama, demonstrating the
 | Framework | Axum 0.8 |
 | Templates | askama |
 | Database | SQLite via rusqlite (bundled) |
-| ORM | [Generic ORM](https://github.com/notactuallytreyanastasio/generic_orm) (vendored) |
+| ORM | [Alloy](https://github.com/notactuallytreyanastasio/alloy) (vendored) |
 | Port | 5003 |
 
 ## ORM Usage
@@ -55,4 +55,4 @@ The `vendor/` directory contains the ORM compiled from Temper to a Rust crate. U
 
 ---
 
-Part of the [Generic ORM](https://github.com/notactuallytreyanastasio/generic_orm) project — write once in Temper, secure everywhere.
+Part of the [Alloy](https://github.com/notactuallytreyanastasio/alloy) project — write once in Temper, secure everywhere.

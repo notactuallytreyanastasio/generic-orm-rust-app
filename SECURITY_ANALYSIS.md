@@ -84,17 +84,13 @@ Schema creation uses hardcoded `CREATE TABLE` statements.
 
 ---
 
-## Findings
+## SQL Findings
 
 | # | Severity | CWE | Finding |
 |---|----------|-----|---------|
 | RS-SQL-1 | LOW | CWE-681 | `Path<i64>` route params are cast to `i32` via `id as i32` for ORM calls. IDs above `i32::MAX` (2,147,483,647) silently wrap, potentially targeting a different record. SQLite uses `i64` rowids, so the ORM's `Int32` type creates a mismatch. Not exploitable for injection, but could cause incorrect deletes/updates. |
 | RS-SQL-2 | INFO | CWE-89 | ORM SQL is executed via `conn.execute(&sql, [])` with an empty parameter array -- the SQL is pre-rendered with escaped values. Correct, but parameterized would be strictly safer. |
 | RS-SQL-3 | INFO | CWE-400 | SELECT queries use `to_sql()` without limits. The ORM's `safe_to_sql(default_limit)` is available but unused. |
-| RS-APP-1 | MEDIUM | CWE-352 | No CSRF protection on any POST route. All state-mutating operations (create, delete, toggle, edit) use HTML forms with POST but no CSRF tokens. An attacker could craft a cross-origin form to delete lists, create todos, or modify data. |
-| RS-APP-2 | LOW | CWE-209 | Error handler in `AppError::into_response` returns `format!("Something went wrong: {}", self.0)` directly to the client, potentially leaking internal error details (database paths, SQL errors, stack traces). |
-| RS-APP-3 | INFO | CWE-862 | No authentication or authorization. Any user can access all lists and todos. Acceptable for a local/demo app, but a production deployment would require auth. |
-| RS-APP-4 | INFO | CWE-1004 | No session management, no cookies set. No `HttpOnly`/`Secure`/`SameSite` cookie flags because no cookies exist. Related to the lack of auth (RS-APP-3). |
 
 ### ORM-Level Concerns (shared across all apps)
 
@@ -108,7 +104,7 @@ Schema creation uses hardcoded `CREATE TABLE` statements.
 
 ## Verdict
 
-**No SQL injection vulnerabilities found.** The ORM covers all user-input-to-SQL paths. This is the only app that uses the ORM for toggle-completed (rather than raw SQL), giving it the highest ORM coverage. The `i64` to `i32` truncation is a correctness concern, not an injection vector. The primary web-layer risks are missing CSRF protection and verbose error messages.
+**No SQL injection vulnerabilities found.** The ORM covers all user-input-to-SQL paths. This is the only app that uses the ORM for toggle-completed (rather than raw SQL), giving it the highest ORM coverage. The `i64` to `i32` truncation is a correctness concern, not an injection vector.
 
 ---
 
@@ -147,70 +143,6 @@ This is the core value proposition of a cross-compiled ORM: **one fix in Temper 
 | ORM-2 | LOW | RESOLVED | `SqlDate::format_to()` now escapes quotes |
 | ORM-3 | LOW | RESOLVED | `SqlFloat64::format_to()` renders NaN/Infinity as `NULL` |
 | ORM-4 | INFO | ACKNOWLEDGED | Design limitation -- escaping-based, not parameterized |
-
----
-
-## MITRE Top 25 CWE Analysis (2024)
-
-Systematic mapping of the 2024 CWE Top 25 Most Dangerous Software Weaknesses against this application.
-
-### Assessment Methodology
-
-Each CWE is evaluated against the application codebase (`src/main.rs`), templates (`templates/*.html`), the vendored ORM (`vendor/orm/`), and the deployment configuration (`Cargo.toml`). Status categories:
-
-- **Mitigated** -- The app has adequate protection against this weakness.
-- **Partially Mitigated** -- Some protection exists but gaps remain.
-- **Vulnerable** -- The app is susceptible to this weakness.
-- **N/A** -- The weakness category does not apply to this app's architecture.
-
-### Full Mapping Table
-
-| Rank | CWE | Name | Status | Analysis |
-|------|-----|------|--------|----------|
-| 1 | CWE-787 | Out-of-bounds Write | **Mitigated** | Rust's memory safety prevents buffer overflows. No `unsafe` blocks in application code. The vendored ORM is compiler-generated Rust with no `unsafe`. |
-| 2 | CWE-79 | Cross-site Scripting (XSS) | **Mitigated** | Askama templates auto-escape all interpolated values by default. `{{ list.name }}`, `{{ todo.title }}`, `{{ list.id }}` all go through HTML entity encoding. No `|safe` or raw filters used anywhere. |
-| 3 | CWE-89 | SQL Injection | **Mitigated** | All user-input-to-SQL paths go through the ORM's type-safe SQL generation: `SafeIdentifier` validates table/column names against `[a-zA-Z_][a-zA-Z0-9_]*`; `SqlString` escapes `'` to `''`; `SqlBuilder::append_int32/64` renders bare integers; `changeset().cast()` whitelists allowed fields. The one raw SQL statement with user data (`DELETE FROM todos WHERE list_id = ?1`) uses rusqlite parameterized binding. The JOIN aggregate query is entirely hardcoded. See detailed SQL analysis above. |
-| 4 | CWE-416 | Use After Free | **Mitigated** | Rust's ownership system prevents use-after-free. All shared state uses `Arc<Mutex<>>`. No `unsafe` code. |
-| 5 | CWE-78 | OS Command Injection | **N/A** | No shell commands, process spawning, or `std::process::Command` usage anywhere in the application. |
-| 6 | CWE-20 | Improper Input Validation | **Partially Mitigated** | Axum's typed extractors (`Path<i64>`, `Form<T>`) enforce basic type constraints. The ORM's `validate_required()` checks for non-empty fields. However: (a) no length limits on `name` or `title` fields, (b) no content validation beyond non-empty, (c) the `i64` to `i32` truncation in `id as i32` is unchecked (RS-SQL-1). |
-| 7 | CWE-125 | Out-of-bounds Read | **Mitigated** | Rust prevents out-of-bounds reads with bounds-checked indexing. No `unsafe` code. |
-| 8 | CWE-22 | Path Traversal | **Mitigated** | The only file-serving is `ServeDir::new("static")` from tower-http, which restricts to the `static/` directory and rejects `..` traversal by default. The database file `todo.db` is opened with a hardcoded path. No user-controlled file paths anywhere. |
-| 9 | CWE-352 | Cross-Site Request Forgery | **Vulnerable** | No CSRF protection on any state-mutating endpoint. All POST routes (`/lists`, `/lists/{id}/delete`, `/lists/{id}/todos`, `/todos/{id}/toggle`, `/todos/{id}/delete`, `/todos/{id}/edit`) accept plain HTML form submissions without any token validation. An attacker could craft a cross-origin form submission to create, modify, or delete data. **Finding RS-APP-1.** |
-| 10 | CWE-434 | Unrestricted Upload of File with Dangerous Type | **N/A** | No file upload functionality exists. |
-| 11 | CWE-862 | Missing Authorization | **Vulnerable** | No authentication or authorization mechanism. All endpoints are publicly accessible. Any network-reachable client can perform all CRUD operations. Acceptable for a local demo but a vulnerability in any multi-user or internet-facing deployment. **Finding RS-APP-3.** |
-| 12 | CWE-476 | NULL Pointer Dereference | **Mitigated** | Rust's `Option` type prevents null pointer dereference. The `.unwrap()` calls on database operations will panic rather than dereference null, though panics in `spawn_blocking` are caught by tokio and converted to errors. |
-| 13 | CWE-287 | Improper Authentication | **Vulnerable** | No authentication system exists. No login, no sessions, no API keys. Same scope as CWE-862 above. |
-| 14 | CWE-190 | Integer Overflow or Wraparound | **Partially Mitigated** | Rust's debug-mode integer arithmetic panics on overflow. In release mode, `id as i32` performs a wrapping truncation of `i64` values -- IDs above `i32::MAX` silently wrap to negative values, potentially targeting a different database record. **Finding RS-SQL-1.** |
-| 15 | CWE-502 | Deserialization of Untrusted Data | **Mitigated** | Serde deserialization is limited to simple form fields (`name: String`, `title: String`) via Axum's `Form<T>` extractor. No arbitrary deserialization, no polymorphic types, no `#[serde(deny_unknown_fields)]` needed for these flat structs. |
-| 16 | CWE-77 | Command Injection | **N/A** | No command execution. Same as CWE-78. |
-| 17 | CWE-119 | Improper Restriction of Operations within Memory Buffer | **Mitigated** | Rust's memory safety model. No `unsafe` blocks. |
-| 18 | CWE-798 | Use of Hard-coded Credentials | **N/A** | No credentials in the codebase. The SQLite database is file-based with no authentication. No API keys, passwords, or secrets. |
-| 19 | CWE-918 | Server-Side Request Forgery (SSRF) | **N/A** | No outbound HTTP requests. The app is a pure request-handler with no server-side fetching. |
-| 20 | CWE-306 | Missing Authentication for Critical Function | **Vulnerable** | DELETE operations (lists, todos) are available without authentication. Same scope as CWE-862/287 above. |
-| 21 | CWE-362 | Race Condition (TOCTOU) | **Partially Mitigated** | The `Arc<Mutex<Connection>>` serializes all database access, preventing concurrent SQLite corruption. However, the read-then-write pattern in `toggle_todo` (read current completed status, then update) is not atomic -- a concurrent toggle could read stale data. Low severity given the single-Mutex design and SQLite's serialized writes. |
-| 22 | CWE-269 | Improper Privilege Management | **N/A** | Single-role application with no privilege levels. |
-| 23 | CWE-94 | Code Injection | **N/A** | No `eval()`, no dynamic code generation, no template injection (Askama compiles templates at build time). |
-| 24 | CWE-863 | Incorrect Authorization | **N/A** | No authorization logic exists to be incorrect. The broader issue is CWE-862 (missing authorization). |
-| 25 | CWE-276 | Incorrect Default Permissions | **Partially Mitigated** | The SQLite database file `todo.db` is created with default `umask` permissions. The app binds to `0.0.0.0:5003`, exposing the service to all network interfaces rather than localhost only. |
-
-### Summary by Status
-
-| Status | Count | CWEs |
-|--------|-------|------|
-| Mitigated | 10 | CWE-787, CWE-79, CWE-89, CWE-416, CWE-125, CWE-22, CWE-476, CWE-502, CWE-119, N/A items |
-| Partially Mitigated | 4 | CWE-20, CWE-190, CWE-362, CWE-276 |
-| Vulnerable | 4 | CWE-352, CWE-862, CWE-287, CWE-306 |
-| N/A | 7 | CWE-78, CWE-434, CWE-77, CWE-798, CWE-918, CWE-269, CWE-94, CWE-863 |
-
-### Key Risk Areas
-
-1. **Authentication/Authorization (CWE-862, CWE-287, CWE-306):** The most significant gap. The app has zero access control. In a production deployment, all CRUD operations would need authentication and per-user scoping.
-
-2. **CSRF (CWE-352):** The second most significant web-layer vulnerability. Any authenticated deployment would need CSRF tokens (e.g., via `axum-csrf` or `tower-csrf` middleware) on all form submissions.
-
-3. **Input Validation (CWE-20):** While the ORM's `SafeIdentifier` and type system prevent injection, there are no application-level constraints on input length or content. A user could submit arbitrarily long strings for list names or todo titles.
-
-4. **Network Exposure (CWE-276):** Binding to `0.0.0.0` exposes the service to all network interfaces. A production deployment should bind to `127.0.0.1` or use a reverse proxy.
 
 ---
 
@@ -318,21 +250,31 @@ This would provide the same safety guarantees with the added benefit of validate
 
 ---
 
+## SQL-Related CWE Mapping
+
+Relevant Common Weakness Enumeration (CWE) classifications for SQL security in this application:
+
+| CWE | Name | Status | Analysis |
+|-----|------|--------|----------|
+| CWE-89 | SQL Injection | **Mitigated** | All user-input-to-SQL paths go through the ORM's type-safe SQL generation: `SafeIdentifier` validates table/column names against `[a-zA-Z_][a-zA-Z0-9_]*`; `SqlString` escapes `'` to `''`; `SqlBuilder::append_int32/64` renders bare integers; `changeset().cast()` whitelists allowed fields. The one raw SQL statement with user data (`DELETE FROM todos WHERE list_id = ?1`) uses rusqlite parameterized binding. The JOIN aggregate query is entirely hardcoded. |
+| CWE-20 | Improper Input Validation | **Partially Mitigated** | The ORM's `validate_required()` checks for non-empty fields and `SafeIdentifier` validates all SQL identifiers. However, no length limits on `name` or `title` fields and the `i64` to `i32` truncation in `id as i32` is unchecked (RS-SQL-1). |
+| CWE-190 | Integer Overflow or Wraparound | **Partially Mitigated** | Rust's debug-mode integer arithmetic panics on overflow. In release mode, `id as i32` performs a wrapping truncation of `i64` values -- IDs above `i32::MAX` silently wrap to negative values, potentially targeting a different database record (RS-SQL-1). |
+| CWE-400 | Uncontrolled Resource Consumption | **Partially Mitigated** | SELECT queries use `to_sql()` without limits. The ORM's `safe_to_sql(default_limit)` is available but unused (RS-SQL-3). JOIN queries can produce large Cartesian products (JOIN-1). |
+| CWE-915 | Improperly Controlled Modification of Dynamically-Determined Object Attributes | **Mitigated** | The `changeset().cast()` method explicitly whitelists allowed fields for INSERT/UPDATE operations. No mass-assignment vulnerability exists. |
+
+---
+
 ## Combined Finding Summary
 
 **Updated: 2026-03-13**
 
-### Application-Level Findings
+### Application-Level SQL Findings
 
 | # | Severity | CWE | Status | Finding |
 |---|----------|-----|--------|---------|
 | RS-SQL-1 | LOW | CWE-681/190 | OPEN | `i64` to `i32` truncation on route params passed to ORM |
 | RS-SQL-2 | INFO | CWE-89 | OPEN | ORM SQL executed with empty params (escaping-based, not parameterized) |
 | RS-SQL-3 | INFO | CWE-400 | OPEN | SELECT queries use `to_sql()` without limits |
-| RS-APP-1 | MEDIUM | CWE-352 | OPEN | No CSRF protection on POST routes |
-| RS-APP-2 | LOW | CWE-209 | OPEN | Error handler leaks internal error details to client |
-| RS-APP-3 | INFO | CWE-862 | OPEN | No authentication or authorization |
-| RS-APP-4 | INFO | CWE-1004 | OPEN | No session management |
 
 ### ORM-Level Findings (Resolved)
 
@@ -351,11 +293,11 @@ This would provide the same safety guarantees with the added benefit of validate
 | JOIN-2 | INFO | -- | OK | `col()` helper uses hardcoded dot separator |
 | JOIN-3 | INFO | -- | OK | Chained JOINs preserve order, immutable Query pattern |
 
-### Totals
+### SQL Security Totals
 
 | Severity | Open | Resolved | Total |
 |----------|------|----------|-------|
-| MEDIUM | 1 (RS-APP-1) | 1 (ORM-1) | 2 |
-| LOW | 2 (RS-SQL-1, RS-APP-2) | 2 (ORM-2, ORM-3) | 4 |
-| INFO | 5 (RS-SQL-2, RS-SQL-3, RS-APP-3, RS-APP-4, JOIN-1) | 0 | 5 |
-| **Total** | **8** | **3** | **11** |
+| MEDIUM | 0 | 1 (ORM-1) | 1 |
+| LOW | 1 (RS-SQL-1) | 2 (ORM-2, ORM-3) | 3 |
+| INFO | 4 (RS-SQL-2, RS-SQL-3, JOIN-1, ORM-4) | 0 | 4 |
+| **Total** | **5** | **3** | **8** |
